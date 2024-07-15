@@ -1,7 +1,5 @@
 #!/usr/bin/env python     
 #coding:utf-8
-import re
-import urllib
 
 from burp import IBurpExtender
 from burp import IHttpListener
@@ -11,8 +9,7 @@ from javax.swing import JMenu
 from javax.swing import JMenuItem
 import urllib
 import json
-
- 
+import re
  
 class BurpExtender(IBurpExtender, IHttpListener,IContextMenuFactory):
  
@@ -24,6 +21,7 @@ class BurpExtender(IBurpExtender, IHttpListener,IContextMenuFactory):
         callbacks.registerContextMenuFactory(self)
         self.stdout = PrintWriter(callbacks.getStdout(), True)
         self.stderr = PrintWriter(callbacks.getStderr(), True)
+        self._pattern = r'<[i|b|a|s|f|l|p|m|e|o|d|v].*?>'
         callbacks.issueAlert("Loaded Successfull.")
  
     def createMenuItems(self, invocation):
@@ -107,41 +105,37 @@ class BurpExtender(IBurpExtender, IHttpListener,IContextMenuFactory):
     #TODO 整个payload表，轮流使用全部payload
     def getpayload(self):
         return "x'\"><rivirtest></script><img+src=0+onerror=alert(1)>"
-    #TODO 去response中check回显
 
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
-        
-        # determine what tool we would like to pass though our extension:
-        if toolFlag == 64 or toolFlag == 16 or toolFlag == 32: #if tool is Proxy Tab or repeater
-            # determine if request or response:
+        if toolFlag==64 or toolFlag==32 or toolFlag == 16:
             if not messageIsRequest:#only handle responses
-                response = messageInfo.getResponse()
-                 #get Response from IHttpRequestResponse instance
-                analyzedResponse = self._helpers.analyzeResponse(response) # returns IResponseInfo
-                headers = analyzedResponse.getHeaders()
-                #替换iso8859-1
-                # iterate though list of headers
-                new_headers = []
-                for header in headers:
-                    # Look for Content-Type Header)
-                    if header.startswith("Content-Type:"):
-                        # Look for HTML response
-                        # header.replace('iso-8859-1', 'utf-8')
-                        # print header
-                        new_headers.append(header.replace('iso-8859-1', 'utf-8'))
-                    else:
-                        new_headers.append(header)
+                # 获得请求体
+                request = messageInfo.getRequest()
+                analyzedRequest = self._helpers.analyzeRequest(request) # 用来获取请求头一类的对象
+                analyzedRequest2 = self._helpers.analyzeRequest(messageInfo) # 用来获取url的对象   
+                # reqHeaders = analyzedRequest.getHeaders()                
+                reqParaList = analyzedRequest.getParameters()
+                reqUrl = analyzedRequest2.getUrl()
+                Allparams = {}
 
-                #print new_headers
+                for para in reqParaList:
+                    if para.getType() != para.PARAM_COOKIE:
+                        Allparams[para.getName()] = para.getValue()
 
+                # 获得响应体
+                response = messageInfo.getResponse() # get response
+                analyzedResponse = self._helpers.analyzeResponse(response)
                 body = response[analyzedResponse.getBodyOffset():]
-                body_string = body.tostring()
-                #print body_string
-                u_char_escape = re.search( r'(?:\\u[\d\w]{4})+', body_string)
-                if u_char_escape:
-                    # print u_char_escape.group()
-                    u_char = u_char_escape.group().decode('unicode_escape').encode('utf8')
-                    new_body_string = body_string.replace(u_char_escape.group(),'--'+u_char+'--')
-                    new_body = self._helpers.bytesToString(new_body_string)
-                    # print new_body_string
-                    messageInfo.setResponse(self._helpers.buildHttpMessage(new_headers, new_body))
+                response_body = body.tostring() # get response_body
+                tags = re.findall(self._pattern,response_body.encode('utf-8'))
+                self.ChecktheSame(Allparams,tags,reqUrl)
+
+    #TODO 比较复杂的场景下似乎无法check成功
+    def ChecktheSame(self,Allparams,tags,reqUrl):
+        for param_key in Allparams:
+            if Allparams[param_key]:
+                for tag in tags:                                                    
+                    if tag.find(Allparams[param_key]) != -1:
+                        print("param is \"%s\" , that is :   %s\n" % (param_key,reqUrl))
+                    else:
+                        continue
