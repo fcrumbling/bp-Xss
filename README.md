@@ -1,12 +1,15 @@
 用于Xss扫描利用的burpsuite插件。
 
-Xss.py用于自动插入payload
+bpXss可以在burpsuite中插入Xss相关payload并自动检查response中的回显，还会将所有的记录记录下来
 
-## 参考
+1.1版本基本功能已经完成
 
-[jiangsir404/Xss-Sql-Fuzz: burpsuite 插件对GP所有参数(过滤特殊参数)一键自动添加xss sql payload 进行fuzz (github.com)](https://github.com/jiangsir404/Xss-Sql-Fuzz)
+TODO
 
-[Hpd0ger/SuperTags: 一个Burpsuite插件，用于检测隐藏的XSS (github.com)](https://github.com/Hpd0ger/SuperTags)
+- 测试
+- 可能需要完善一下payload文件
+- 可视化
 
-[ianxtianxt/Automated-blind-xss-search-for-Burp-Suite: BurpSuite插件，用于自动化执行blind-xss盲搜索。它能够执行主动和被动检查。 (github.com)](https://github.com/ianxtianxt/Automated-blind-xss-search-for-Burp-Suite)
 
+
+如有侵权，请联系删除

@@ -10,7 +10,7 @@ from javax.swing import JMenuItem
 import urllib
 import json
 import re
- 
+version=1.1
 class BurpExtender(IBurpExtender, IHttpListener,IContextMenuFactory):
  
     def registerExtenderCallbacks(self, callbacks):
@@ -22,15 +22,23 @@ class BurpExtender(IBurpExtender, IHttpListener,IContextMenuFactory):
         self.stdout = PrintWriter(callbacks.getStdout(), True)
         self.stderr = PrintWriter(callbacks.getStderr(), True)
         self._pattern = r'<[i|b|a|s|f|l|p|m|e|o|d|v].*?>'
+        self.payloads = self.load_payloads("payload.txt")
         callbacks.issueAlert("Loaded Successfull.")
- 
+        print(f'version={version}')
+    def load_payloads(self, filepath):
+        try:
+            with open(filepath, 'r') as file:
+                return file.read().splitlines()
+        except Exception as e:
+            print(f"Error loading payloads: {e}")
+            return []
     def createMenuItems(self, invocation):
         self.menus = []
         self.mainMenu = JMenu("Xss")
         self.menus.append(self.mainMenu)
         self.invocation = invocation
         menuItem = ['post fuzz',
-        'get fuzz']
+        'get fuzz','XFF']
         for tool in menuItem:
             if tool.startswith('post fuzz'):
                 menu = JMenuItem(tool,None,actionPerformed=lambda x:self.postXss(x))
@@ -48,11 +56,15 @@ class BurpExtender(IBurpExtender, IHttpListener,IContextMenuFactory):
             self.headers = list(requestInfo.getHeaders())
             bodyBytes = currentRequest.getRequest()[requestInfo.getBodyOffset():]
             self.body = self._helpers.bytesToString(bodyBytes)
-            #解码请求体，并更新其中的内容
-            source, result = self.update_body(urllib.unquote(self.body))
-            self.body = self.body.replace(source, result)
-            newMessage = self._helpers.buildHttpMessage(self.headers, self.body)
-            currentRequest.setRequest(newMessage)
+            #解码请求体，更新内容，check回显
+            for payload in self.payloads:
+                source, result = self.update_body(urllib.unquote(self.body), payload)
+                self.body = self.body.replace(source, result)
+                newMessage = self._helpers.buildHttpMessage(self.headers, self.body)
+                currentRequest.setRequest(newMessage)
+                #check
+                response = self._callbacks.makeHttpRequest(currentRequest.getHttpService(), newMessage)
+                self.processHttpMessage(32, False, response)
     def getXss(self,x):#get请求下需要在参数中插入payload
         if x.getSource().text.startswith('get fuzz'):
             # 获取payload
@@ -62,18 +74,23 @@ class BurpExtender(IBurpExtender, IHttpListener,IContextMenuFactory):
             requestInfo = self._helpers.analyzeRequest(currentRequest) 
             paraList = requestInfo.getParameters()#获取参数列表
             new_requestInfo = bodyBytes
-            white_action = ['action','sign']#白名单
-            for para in paraList:#筛选掉白名单内容并对参数添加payload
-                if para.getType() == 0 and not self.Filter(white_action,para.getName()):
-                    value = para.getValue()+self.payload 
-                    key = para.getName()
-                    newPara = self._helpers.buildParameter(key, value, para.getType())
-                    new_requestInfo = self._helpers.updateParameter(new_requestInfo,newPara)
+            white_action = ['action', 'sign']
+            for payload in self.payloads:
+                for para in paraList:
+                    if para.getType() == 0 and not self.Filter(white_action, para.getName()):
+                        value = para.getValue() + payload
+                        key = para.getName()
+                        newPara = self._helpers.buildParameter(key, value, para.getType())
+                        new_requestInfo = self._helpers.updateParameter(new_requestInfo, newPara)
+                currentRequest.setRequest(new_requestInfo)
+                #check
+                response = self._callbacks.makeHttpRequest(currentRequest.getHttpService(), new_requestInfo)
+                self.processHttpMessage(32, False, response)
                     
             currentRequest.setRequest(new_requestInfo)
-    def Filter(self,white_action,key):
-        #模糊匹配
-        return True if([True for i in white_action if i in key.lower()]) else False
+    def Filter(self, white_action, key):
+        return any(action in key.lower() for action in white_action)
+    
     def update_body(self,body=""):
         try:
             source = body
@@ -101,41 +118,45 @@ class BurpExtender(IBurpExtender, IHttpListener,IContextMenuFactory):
                 result=json.dumps(data)
             return source,result
         except Exception as e:
-            return e
-    #TODO 整个payload表，轮流使用全部payload
-    def getpayload(self):
-        return "x'\"><rivirtest></script><img+src=0+onerror=alert(1)>"
+            print(f"Error updating body: {e}")
+            return body,body
+    # def getpayload(self):
+    #     return "x'\"><rivirtest></script><img+src=0+onerror=alert(1)>"
 
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
-        if toolFlag==64 or toolFlag==32 or toolFlag == 16:
-            if not messageIsRequest:#only handle responses
-                # 获得请求体
+        if toolFlag in {32}:#可选
+           if not messageIsRequest:
                 request = messageInfo.getRequest()
-                analyzedRequest = self._helpers.analyzeRequest(request) # 用来获取请求头一类的对象
-                analyzedRequest2 = self._helpers.analyzeRequest(messageInfo) # 用来获取url的对象   
-                # reqHeaders = analyzedRequest.getHeaders()                
+                analyzedRequest = self._helpers.analyzeRequest(request)
                 reqParaList = analyzedRequest.getParameters()
-                reqUrl = analyzedRequest2.getUrl()
+                reqUrl = analyzedRequest.getUrl()
                 Allparams = {}
-
                 for para in reqParaList:
                     if para.getType() != para.PARAM_COOKIE:
                         Allparams[para.getName()] = para.getValue()
-
-                # 获得响应体
-                response = messageInfo.getResponse() # get response
+                response = messageInfo.getResponse()
                 analyzedResponse = self._helpers.analyzeResponse(response)
                 body = response[analyzedResponse.getBodyOffset():]
-                response_body = body.tostring() # get response_body
-                tags = re.findall(self._pattern,response_body.encode('utf-8'))
-                self.ChecktheSame(Allparams,tags,reqUrl)
-
-    #TODO 比较复杂的场景下似乎无法check成功
-    def ChecktheSame(self,Allparams,tags,reqUrl):
+                response_body = body.tostring()
+                tags = re.findall(self._pattern, response_body.encode('utf-8'))
+                self.ChecktheSame(Allparams, tags, reqUrl)
+                #加入日志
+                self.logRequestResponse(request, response, tags)
+                
+    def ChecktheSame(self, Allparams, tags, reqUrl):
         for param_key in Allparams:
             if Allparams[param_key]:
-                for tag in tags:                                                    
+                for tag in tags:
                     if tag.find(Allparams[param_key]) != -1:
-                        print("param is \"%s\" , that is :   %s\n" % (param_key,reqUrl))
-                    else:
-                        continue
+                        self.stdout.println(f"Param is \"{param_key}\" , that is : {reqUrl}")
+
+    def logRequestResponse(self, request, response, tags):
+        request_str = self._helpers.bytesToString(request)
+        response_str = self._helpers.bytesToString(response)
+        log_entry = {
+            "request": request_str,
+            "response": response_str,
+            "tags": tags
+        }
+        with open("xss_log.txt", "a") as log_file:
+            log_file.write(json.dumps(log_entry, indent=4) + "\n")
